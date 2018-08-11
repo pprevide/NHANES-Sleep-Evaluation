@@ -1,0 +1,349 @@
+---
+title: "Final Project, MATH448"
+author: "Paul Previde"
+date: "May 23, 2017"
+output:
+  pdf_document
+    
+---
+
+```{r setup, include=FALSE}
+# DO NOT ALTER CODE IN THIS CHUNK
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+knitr::opts_knit$set(root.dir="/home/p/R")
+library(dplyr)
+library(ggplot2)
+```
+
+* * *
+```{r}
+# Read and organize all the csv files
+rm(d1,d2,d3,d4,d5,d6, fulldf)
+d1 = read.csv("nhhe/demographic.csv")
+d2 = read.csv("nhhe/diet.csv")
+d3 = read.csv("nhhe/examination.csv")
+d4 = read.csv("nhhe/labs.csv")
+d5 = read.csv("nhhe/medications.csv")
+d6 = read.csv("nhhe/questionnaire.csv")
+# Merge all the csv files into one file, on SEQN column
+#   These data frames are just for exploring the datat
+fulldf = merge(d1, d2, by = "SEQN", all = TRUE)
+fulldf = merge(fulldf, d3, by = "SEQN", all = TRUE)
+fulldf = merge(fulldf, d4, by = "SEQN", all = TRUE)
+fulldf = merge(fulldf, d5, by = "SEQN", all = TRUE)
+fulldf = merge(fulldf, d6, by = "SEQN", all = TRUE)
+dim(fulldf)
+sum(is.na(fulldf))
+numberofcells = dim(fulldf)[1]*dim(fulldf)[2]
+numberofcells
+sum(is.na(fulldf))/numberofcells
+
+# Step 1: read the tables and join them at the patient identifier, SEQN
+#    These data frames are for processing
+rm(examsdf, quesdf, demodf, full_patient_df)
+examsdf = read.csv("nhhe/examination.csv")
+dim(examsdf)
+quesdf = read.csv("nhhe/questionnaire.csv")
+dim(quesdf)
+demodf = read.csv("nhhe/demographic.csv")
+intermed = merge(examsdf, quesdf, by = "SEQN", all = TRUE)
+full_patient_df = merge(intermed, demodf, by = "SEQN", all = TRUE)
+rm(intermed)
+dim(full_patient_df)
+sum(is.na(full_patient_df))
+```
+
+
+```{r}
+# Step 2: look for and remove missing data
+#    First, create another data frame from which columns will be trimmed
+rm(orig_patient_df)
+intermed = merge(examsdf, quesdf, by = "SEQN")
+orig_patient_df = merge(intermed, demodf, by = "SEQN", all = TRUE)
+rm(intermed)
+dim(orig_patient_df)
+
+# From examination data set: extract variables of interest
+# blood pressure: BPXSY1, BPXDI1, BPXSY2, BPXDI2, BPXSY3, BPXDI3
+# let bp_avg_sys = 
+# heart rate: BPXPLS
+# BMI: BMXBMI
+rm(sysbp_df, diabp_df, avgbp_dia, avgbp_sys)
+sysbp_df = data.frame(SEQN = orig_patient_df$SEQN, BPXSY1 = orig_patient_df$BPXSY1, BPXSY2 = orig_patient_df$BPXSY2, BPXSY3 = orig_patient_df$BPXSY3)
+diabp_df = data.frame(SEQN = orig_patient_df$SEQN, BPXDI1 = orig_patient_df$BPXDI1, BPXDI2 = orig_patient_df$BPXDI2, BPXDI3 = orig_patient_df$BPXDI3)
+sysbp_df$BPS = rowMeans(sysbp_df[, -1], na.rm = TRUE)
+diabp_df$BPD = rowMeans(diabp_df[, -1], na.rm = TRUE)
+sysbp_df$BPXSY1 = NULL
+sysbp_df$BPXSY2 = NULL
+sysbp_df$BPXSY3 = NULL
+diabp_df$BPXDI1 = NULL
+diabp_df$BPXDI2 = NULL
+diabp_df$BPXDI3 = NULL
+
+# Candidate predictors and responses:
+# From questionnaire dataset: extract variables of interest
+# average number of drinks on days where drinking occurs: ALQ130
+# average number of drinks per month: ALQ120Q, ALQ120U: 1=week, 2=month, 3=year
+
+# sleep quantity: SLD010H: hours of sleep per night
+# sleep quality:   SLQ050: you said you have a sleep disorder
+#               SLQ060: you were told you have a sleep disorder
+rm(drinksdf, demdf, sleepdf, drugdf)
+drinksdf = data.frame(SEQN = orig_patient_df$SEQN, ALQ130 = orig_patient_df$ALQ130, 
+                      ALQ120Q = orig_patient_df$ALQ120Q, ALQ120U = orig_patient_df$ALQ120U)
+drinksdf[drinksdf$ALQ120U==2 & !is.na(drinksdf$ALQ120U), "ALQ120Q"] = drinksdf[drinksdf$ALQ120U==2 & !is.na(drinksdf$ALQ120U), "ALQ120Q"]/4.34
+drinksdf[drinksdf$ALQ120U==3 & !is.na(drinksdf$ALQ120U), "ALQ120Q"] = drinksdf[drinksdf$ALQ120U==3 & !is.na(drinksdf$ALQ120U), "ALQ120Q"]/52.1
+dim(drinksdf)
+drinksdf = na.omit(drinksdf$ALQ130)
+sum(is.na(drinksdf))
+
+demdf = data.frame(SEQN = orig_patient_df$SEQN, RIAGENDR = orig_patient_df$RIAGENDR, RIDAGEYR = orig_patient_df$RIDAGEYR)
+demdf$AGE = cut(orig_patient_df$RIDAGEYR, c(0,20,40,60,80), right = FALSE, labels = c(1:4))
+demdf$RIDAGEYR = NULL
+names(demdf)
+
+
+# Change values of SLD010H over 12 to NA, those numbers are not permitted
+sleepdf = data.frame(SEQN = orig_patient_df$SEQN, SLD010H = orig_patient_df$SLD010H, SLQ050 = orig_patient_df$SLQ050, SLQ060 = orig_patient_df$SLQ060)
+sleepdf[sleepdf$SLD010H>12 & !is.na(sleepdf$SLD010H), "SLD010H"] = NA
+sum(sleepdf$SLD010H>12, na.rm = TRUE)
+# Change values of SLD050>2 to NA, those values aren't permitted
+sleepdf[sleepdf$SLQ050>2 & !is.na(sleepdf$SLQ050), "SLQ050"] = NA
+sum(sleepdf$SLQ050>2, na.rm = TRUE)
+sleepdf[sleepdf$SLQ060>2 & !is.na(sleepdf$SLQ060), "SLQ060"] = NA
+sum(sleepdf$SLQ060>2, na.rm = TRUE)
+# Let's combine a Yes in either of the two foregoing into just a single "yes"
+sleepdf$SLPD = ifelse(sleepdf$SLQ050==1 | sleepdf$SLQ060==1, 1, 0)
+# drug use: DUQ230: how many days of the last month did you use marijuana or hashish?
+#         DUQ280:  how many days of the last month did you use cocaine?
+#         DUQ320:  how many days of the last month did you use herion?
+#         SMQ040: do you smokke cigarettes?
+#         SMD650: on smoking days, how many do you smoke?
+drugdf = data.frame(SEQN = orig_patient_df$SEQN, DUQ230 = orig_patient_df$DUQ230, DUQ280 = orig_patient_df$DUQ280, DUQ320 = orig_patient_df$DUQ320, SMQ040 = orig_patient_df$SMQ040,
+                    SMD650 = orig_patient_df$SMD650)
+dim(drugdf)
+# Now, drugdf, sleepdf, and drinksdf are ready to be combined into patientdf
+#next, add a line here to switch anything but 1 or 0 to NA
+# prrr[prrr$a<99, "c"] = NA
+
+dim(sleepdf)
+
+```
+
+```{r}
+rm(patient_df,nextdf)
+patient_df = merge(sysbp_df, diabp_df, by = "SEQN", all = TRUE)
+nextdf = data.frame(SEQN = orig_patient_df$SEQN, HR = orig_patient_df$BPXPLS, BMXBMI = orig_patient_df$BMXBMI, BMI = cut(orig_patient_df$BMXBMI, c(0, 18.5, 25, 30, 99), right=FALSE, labels = c(1:4)))
+patient_df = merge(patient_df, nextdf, by = "SEQN", all = TRUE)
+#patient_df = data.frame(SEQN = orig_patient_df$SEQN, BPS = avgbp_sys, BPD = avgbp_dia, 
+#                        HR = orig_patient_df$BPXPLS, 
+#                        BMI = cut(orig_patient_df$BMXBMI, c(0, 18.5, 25, 30, 99), right=FALSE,
+#                                  labels = c(1:4)))
+patient_df = merge(patient_df, sleepdf, by = "SEQN", all = TRUE)
+patient_df = merge(patient_df, drugdf, by = "SEQN", all = TRUE)
+patient_df = merge(patient_df, drinksdf, by = "SEQN", all = TRUE)
+patient_df = merge(patient_df, demdf, by = "SEQN", all = TRUE)
+patient_df$SEQN = NULL
+#patient_df$SLQ050 = NULL
+#patient_df$SLQ060 = NULL
+dim(patient_df)
+names(patient_df)
+```
+
+
+#### Basic Linear Regression 
+```{r}
+if ("patient_df" %in% search()) {
+} else {
+  attach(patient_df)
+} 
+rm(lm_fit)
+library(boot)
+#lm_fit = lm(SLD010H~BMI, data = patient_df)
+#lm_fit = lm(SLD010H~BPS+BPD+HR+BMI, data = patient_df)
+detach(patient_df)
+patient_df_rmv = subset(patient_df, select = c(SLD010H, SLPD, RIDAGEYR, AGE, RIAGENDR, BPS, BMXBMI, BMI, HR, SMQ040, ALQ120Q))
+patient_df_rmv = na.omit(patient_df_rmv)
+dim(patient_df_rmv)
+attach(patient_df_rmv)
+lm_fit = lm(SLD010H~RIDAGEYR+RIAGENDR+HR+BMXBMI+SMQ040+ALQ120Q, data = patient_df_rmv)
+
+summary(lm_fit)
+patient_df_small = subset(patient_df, select = c(SLD010H, AGE, RIAGENDR, BMI, HR, SMQ040))
+dim(patient_df_small)
+patient_df_small = na.omit(patient_df_small)
+dim(patient_df_small)
+detach(patient_df)
+attach(patient_df_rev)
+length(SLD010H)
+glm_cvfit = glm(SLD010H~RIDAGEYR+RIAGENDR+HR+BMXBMI+SMQ040+ALQ120Q, data = patient_df_rmv)
+glm_err = cv.glm(patient_df_rmv, glm_cvfit, K=10)
+glm_err$delta
+detach(patient_df_small)
+attach(patient_df)
+lm_err = cv.glm(patient_df, lm_fit, K=10)$delta[1]
+lm_err
+
+
+cv_error = rep(0,10)
+for (i in 1:10) {
+  glmfit = cv.glm(patient_df, lm_fit, K=10)$delta[1]
+}
+min(cv_error)
+
+```
+#### Logistic Regression
+```{r}
+rm(glm_fit)
+detach(patient_df)
+attach(patient_df_rmv)
+patient_df_cls = subset(patient_df, select = c(SLD010H, SLPD, AGE, RIAGENDR, BPS, HR, BMI, SMD650, SMQ040, ALQ120Q))
+dim(patient_df_cls)
+patient_df_cls = na.omit(patient_df_cls)
+dim(patient_df_cls)
+glm_fit = glm(SLPD~AGE+RIAGENDR+BPS+BPD+HR+BMI+SMD650+SMQ040+ALQ120Q+ALQ130+DUQ230, data=patient_df, family=binomial)
+glm_fit = glm(SLPD~RIDAGEYR+RIAGENDR+HR+BMXBMI+SMQ040+ALQ120Q, data = patient_df_rmv, family=binomial)
+summary(glm_fit)
+```
+#### Ridge and lasso
+```{r}
+library(glmnet)
+rm(ridgelassodf, train, test, cv.out, grid, x, y, ridge.mod)
+#ridgelassodf = subset(patient_df, select = c(SLD010H, AGE, RIAGENDR, HR, BMI, ALQ120Q))
+#ridgelassodf = na.omit(ridgelassodf)
+ridgelassodf = patient_df_rmv
+names(ridgelassodf)
+dim(ridgelassodf)
+sum(is.na(ridgelassodf))
+detach(patient_df_rmv)
+attach(ridgelassodf)
+x = model.matrix(SLD010H~RIDAGEYR+RIAGENDR+HR+BMXBMI+ALQ120Q+SMQ040, data = ridgelassodf)[,-1]
+
+dim(x)
+y = SLD010H
+
+grid =10^seq(10, -4 , length =1000)
+ridge.mod = glmnet(x,y,alpha=0, lambda = grid)
+set.seed(1)
+train = sample(1:nrow(x), nrow(x)/2)
+test = (-train)
+y.test = y[test]
+cv.out = cv.glmnet(x[train,], y[train], alpha=0)
+plot(cv.out)
+bestlam = cv.out$lambda.min
+log10(bestlam)
+ridge_pred = predict(ridge.mod, s=bestlam, newx = x[test,])
+ridge_err = mean((ridge_pred - y.test)^2)
+ridge_err
+
+# Now lasso
+lasso.mod = glmnet(x,y,alpha=1, lambda=grid)
+set.seed(1)
+train = sample(1:nrow(x), nrow(x)/2)
+test = (-train)
+y.test = y[test]
+cv.out = cv.glmnet(x[train,], y[train], alpha=1)
+plot(cv.out)
+bestlam = cv.out$lambda.min
+log10(bestlam)
+lasso_pred = predict(lasso.mod, s=bestlam, newx = x[test,])
+lasso_err = mean((lasso_pred - y.test)^2)
+lasso_err
+# Now get the predictors that lasso reduced to 0:
+out = glmnet(x,y,alpha=1, lambda = grid)
+lasso_coef = predict(out, type="coefficients", s=bestlam)
+lasso_coef
+detach(ridgelassodf)
+attach(patient_df_small)
+
+rm(ridgelassodf, train, test, cv.out, grid, x, y, ridge.mod)
+plot(lasso.mod)
+```
+
+#### Polynomial regression
+```{r}
+# use BMI as numeric, and age as numeric
+rm(plm_fit, plm_fit1, plm_fit2, plm_fit3, pglm_fit)
+attach(patient_df_rmv)
+plm_fit =  lm(SLD010H~poly(as.numeric(RIDAGEYR), 3)+poly(as.numeric(BMXBMI), 3), data = patient_df_rev)
+coef(summary(plm_fit))
+rm(plm_fit)
+plm_fit1 = lm(SLD010H~RIDAGEYR, data = patient_df_rmv)
+plm_fit2 = lm(SLD010H~poly(RIDAGEYR,2), data = patient_df_rmv)
+plm_fit3 = lm(SLD010H~poly(RIDAGEYR,3), data = patient_df_rmv)
+anova(plm_fit1, plm_fit2, plm_fit3)
+plm_fit1 = lm(SLD010H~BMXBMI, data = patient_df_rmv)
+plm_fit2 = lm(SLD010H~poly(BMXBMI,2), data = patient_df_rmv)
+plm_fit3 = lm(SLD010H~poly(BMXBMI,3), data = patient_df_rmv)
+anova(plm_fit1, plm_fit2, plm_fit3)
+pglm_fit =  glm(SLD010H~poly(RIDAGEYR, 2)+poly(BMXBMI, 2)+RIAGENDR+poly(HR, 2)+SMQ040+poly(ALQ120Q,2), data = patient_df_rmv)
+coef(summary(pglm_fit))
+#glm(SLD010H~AGE+RIAGENDR+HR+BMI+SMQ040, data = patient_df_small)
+pglm_err = cv.glm(patient_df_rmv, pglm_fit, K=10)
+pglm_err$delta[1]
+
+
+```
+#### LDA and QDA
+```{r}
+library(MASS)
+rm(train, test)
+patient_df_cls = subset(patient_df, select = c(SLPD, AGE, RIAGENDR, BPS, HR, BMI, SMD650, SMQ040, ALQ120Q))
+attach(patient_df_rmv)
+nrow(patient_df_rmv)
+traininds = sample(1:nrow(patient_df_rmv), nrow(patient_df_rmv)/2)
+train = patient_df_rmv[traininds,]
+dim(train)
+test = patient_df_rmv[(-traininds),]
+dim(test)
+lda_fit = lda(SLPD~RIDAGEYR+RIAGENDR+BPS+HR+BMXBMI+SMQ040+ALQ120Q, data = train)
+lda_pred = predict(lda_fit, test)
+lda_results = lda_pred$class
+results = table(lda_results,test$SLPD)
+results
+(results[1,1]+results[2,2])/sum(results)
+
+#Now QDA
+rm(results)
+qda_fit = qda(SLPD~RIDAGEYR+RIAGENDR+BPS+HR+BMXBMI, data = train)
+qda_pred = predict(qda_fit, test)
+qda_results = qda_pred$class
+results = table(qda_results,test$SLPD)
+results
+(results[1,1]+results[2,2])/sum(results)
+```
+x = model.matrix(SLD010H~as.numeric(AGE)+RIAGENDR+HR+as.numeric(BMI)+ALQ120Q, data = ridgelassodf)[,-1]
+
+#### Random forest
+```{r}
+library(randomForest)
+set.seed(1)
+traininds = sample(1:nrow(patient_df_rmv), nrow(patient_df_rmv)/2)
+train = patient_df_rmv[traininds,]
+dim(train)
+test = patient_df_rmv[(-traininds),]
+dim(test)
+rf_fit = randomForest(SLD010H~RIDAGEYR+BMXBMI+BPS+HR+SMQ040+ALQ120Q, data = train, importance = TRUE)
+importance(rf_fit)
+pred_rffit = predict(rf_fit, newdata = test)
+mean((pred_rffit-test$SLD010H)^2)
+rf_fit_subtree = randomForest(SLD010H~RIDAGEYR+BMXBMI+BPS+HR+SMQ040+ALQ120Q, data = train, importance = TRUE, mtry=6)
+importance(rf_fit_subtree)
+pred_rf_sub_fit = predict(rf_fit_subtree, newdata = test)
+mean((pred_rf_sub_fit-test$SLD010H)^2)
+varImpPlot(rf_fit_subtree)
+
+# Now let's predict sleep complaints
+rf_fit = randomForest(as.factor(SLPD)~RIDAGEYR+BMXBMI+BPS+HR+SMQ040+ALQ120Q, data = train, importance = TRUE)
+importance(rf_fit)
+pred_rffit = predict(rf_fit, newdata = test)
+(sum(pred_rffit==test$SLPD))/nrow(test)
+#mean((pred_rffit-test$SLPD)^2)
+rf_fit_subtree = randomForest(as.factor(SLPD)~RIDAGEYR+BMXBMI+BPS+HR+SMQ040+ALQ120Q, data = train, importance = TRUE, mtry=6)
+importance(rf_fit_subtree)
+pred_rf_sub_fit = predict(rf_fit_subtree, newdata = test)
+(sum(pred_rf_sub_fit==test$SLPD))/nrow(test)
+mean((pred_rf_sub_fit-test$SLD010H)^2)
+varImpPlot(rf_fit_subtree)
+```
+
